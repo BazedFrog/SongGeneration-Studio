@@ -8,6 +8,9 @@
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- WaveSurfer.js for waveform visualization -->
+    <script src="https://unpkg.com/wavesurfer.js@7"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.esm.js" type="module"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -106,6 +109,18 @@
             height: 100%;
             background: linear-gradient(90deg, transparent, #10B981, transparent);
             animation: indeterminate 1.5s ease-in-out infinite;
+        }
+
+        /* Waveform trimmer styles */
+        .waveform-container {
+            background: #1a1a1a;
+            border-radius: 8px;
+            padding: 12px;
+            margin: 12px 0;
+        }
+
+        .waveform-container canvas {
+            border-radius: 4px;
         }
     </style>
 </head>
@@ -270,6 +285,550 @@ const DarkAudioPlayer = ({ src }) => {
                     style={{ width: '60px', height: '4px' }}
                 />
             </div>
+        </div>
+    );
+};
+
+// Audio Trimmer Component with Waveform Visualization
+const AudioTrimmer = ({ onAccept, onClear }) => {
+    const [file, setFile] = useState(null);
+    const [clipDuration, setClipDuration] = useState(10);
+    const [regionStart, setRegionStart] = useState(0);
+    const [totalDuration, setTotalDuration] = useState(0);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
+    const [isAccepted, setIsAccepted] = useState(false);
+    const [error, setError] = useState(null);
+
+    const waveformRef = useRef(null);
+    const wavesurferRef = useRef(null);
+    const regionRef = useRef(null);
+    const fileInputRef = useRef(null);
+    const audioContextRef = useRef(null);
+    const audioBufferRef = useRef(null);
+
+    const formatTime = (seconds) => {
+        if (!seconds || isNaN(seconds)) return '0:00';
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
+    };
+
+    // Initialize WaveSurfer when file is loaded
+    useEffect(() => {
+        if (!file || !waveformRef.current) return;
+
+        setIsLoading(true);
+        setError(null);
+
+        // Clean up previous instance
+        if (wavesurferRef.current) {
+            wavesurferRef.current.destroy();
+        }
+
+        // Create WaveSurfer instance
+        const ws = WaveSurfer.create({
+            container: waveformRef.current,
+            waveColor: '#4a4a4a',
+            progressColor: '#10B981',
+            cursorColor: '#10B981',
+            cursorWidth: 2,
+            height: 80,
+            barWidth: 2,
+            barGap: 1,
+            barRadius: 2,
+            normalize: true,
+            backend: 'WebAudio',
+        });
+
+        wavesurferRef.current = ws;
+
+        // Load audio file
+        const url = URL.createObjectURL(file);
+        ws.load(url);
+
+        ws.on('ready', () => {
+            setIsLoading(false);
+            const duration = ws.getDuration();
+            setTotalDuration(duration);
+
+            // Set initial clip duration (min of user preference or total duration)
+            const initialClipDuration = Math.min(clipDuration, duration);
+            setClipDuration(initialClipDuration);
+            setRegionStart(0);
+
+            // Store the decoded audio buffer for trimming
+            if (ws.getDecodedData()) {
+                audioBufferRef.current = ws.getDecodedData();
+            }
+        });
+
+        ws.on('error', (err) => {
+            setIsLoading(false);
+            setError('Failed to load audio file');
+            console.error('WaveSurfer error:', err);
+        });
+
+        ws.on('finish', () => {
+            setIsPlaying(false);
+        });
+
+        return () => {
+            URL.revokeObjectURL(url);
+            if (wavesurferRef.current) {
+                wavesurferRef.current.destroy();
+                wavesurferRef.current = null;
+            }
+        };
+    }, [file]);
+
+    // Handle file selection
+    const handleFileSelect = async (e) => {
+        const selectedFile = e.target.files?.[0];
+        if (!selectedFile) return;
+
+        // Validate file type
+        const validTypes = ['audio/wav', 'audio/mp3', 'audio/mpeg', 'audio/flac', 'audio/ogg'];
+        if (!validTypes.includes(selectedFile.type) && !selectedFile.name.match(/\.(wav|mp3|flac|ogg)$/i)) {
+            setError('Please select a valid audio file (WAV, MP3, FLAC, or OGG)');
+            return;
+        }
+
+        setFile(selectedFile);
+        setIsAccepted(false);
+        setRegionStart(0);
+    };
+
+    // Preview selected region
+    const handlePreview = () => {
+        if (!wavesurferRef.current) return;
+
+        if (isPlaying) {
+            wavesurferRef.current.pause();
+            setIsPlaying(false);
+        } else {
+            // Seek to region start and play
+            wavesurferRef.current.setTime(regionStart);
+            wavesurferRef.current.play();
+            setIsPlaying(true);
+
+            // Stop at region end
+            const checkTime = setInterval(() => {
+                if (wavesurferRef.current) {
+                    const currentTime = wavesurferRef.current.getCurrentTime();
+                    if (currentTime >= regionStart + clipDuration) {
+                        wavesurferRef.current.pause();
+                        setIsPlaying(false);
+                        clearInterval(checkTime);
+                    }
+                }
+            }, 100);
+        }
+    };
+
+    // Audio buffer to WAV conversion
+    const audioBufferToWav = (buffer) => {
+        const numChannels = buffer.numberOfChannels;
+        const sampleRate = buffer.sampleRate;
+        const format = 1; // PCM
+        const bitDepth = 16;
+
+        const bytesPerSample = bitDepth / 8;
+        const blockAlign = numChannels * bytesPerSample;
+        const byteRate = sampleRate * blockAlign;
+        const dataSize = buffer.length * blockAlign;
+        const headerSize = 44;
+        const totalSize = headerSize + dataSize;
+
+        const arrayBuffer = new ArrayBuffer(totalSize);
+        const view = new DataView(arrayBuffer);
+
+        // WAV header
+        const writeString = (offset, string) => {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        };
+
+        writeString(0, 'RIFF');
+        view.setUint32(4, totalSize - 8, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true); // fmt chunk size
+        view.setUint16(20, format, true);
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, byteRate, true);
+        view.setUint16(32, blockAlign, true);
+        view.setUint16(34, bitDepth, true);
+        writeString(36, 'data');
+        view.setUint32(40, dataSize, true);
+
+        // Write interleaved audio data
+        const channels = [];
+        for (let ch = 0; ch < numChannels; ch++) {
+            channels.push(buffer.getChannelData(ch));
+        }
+
+        let offset = 44;
+        for (let i = 0; i < buffer.length; i++) {
+            for (let ch = 0; ch < numChannels; ch++) {
+                const sample = Math.max(-1, Math.min(1, channels[ch][i]));
+                const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+                view.setInt16(offset, intSample, true);
+                offset += 2;
+            }
+        }
+
+        return new Blob([arrayBuffer], { type: 'audio/wav' });
+    };
+
+    // Trim and accept
+    const handleAccept = async () => {
+        if (!audioBufferRef.current) {
+            setError('Audio not loaded yet');
+            return;
+        }
+
+        setIsLoading(true);
+        setError(null);
+
+        try {
+            const sourceBuffer = audioBufferRef.current;
+            const sampleRate = sourceBuffer.sampleRate;
+            const startSample = Math.floor(regionStart * sampleRate);
+            const numSamples = Math.floor(clipDuration * sampleRate);
+
+            // Create AudioContext for creating new buffer
+            if (!audioContextRef.current) {
+                audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+            }
+
+            // Create trimmed buffer
+            const trimmedBuffer = audioContextRef.current.createBuffer(
+                sourceBuffer.numberOfChannels,
+                numSamples,
+                sampleRate
+            );
+
+            // Copy samples
+            for (let ch = 0; ch < sourceBuffer.numberOfChannels; ch++) {
+                const src = sourceBuffer.getChannelData(ch);
+                const dst = trimmedBuffer.getChannelData(ch);
+                for (let i = 0; i < numSamples && (startSample + i) < src.length; i++) {
+                    dst[i] = src[startSample + i];
+                }
+            }
+
+            // Convert to WAV blob
+            const wavBlob = audioBufferToWav(trimmedBuffer);
+
+            // Upload to server
+            const formData = new FormData();
+            formData.append('file', wavBlob, `trimmed_${file.name.replace(/\.[^.]+$/, '')}.wav`);
+
+            const response = await fetch('/api/upload-reference', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                throw new Error(await response.text());
+            }
+
+            const data = await response.json();
+            setIsAccepted(true);
+            setIsLoading(false);
+
+            // Call onAccept with the reference ID and metadata
+            onAccept({
+                id: data.id,
+                fileName: file.name,
+                clipStart: regionStart,
+                clipDuration: clipDuration
+            });
+        } catch (err) {
+            setError(err.message || 'Failed to process audio');
+            setIsLoading(false);
+        }
+    };
+
+    // Clear everything
+    const handleClear = () => {
+        if (wavesurferRef.current) {
+            wavesurferRef.current.destroy();
+            wavesurferRef.current = null;
+        }
+        setFile(null);
+        setIsAccepted(false);
+        setRegionStart(0);
+        setTotalDuration(0);
+        setError(null);
+        audioBufferRef.current = null;
+        onClear();
+    };
+
+    // Update region when duration changes
+    const handleDurationChange = (newDuration) => {
+        const maxDuration = Math.min(newDuration, totalDuration);
+        setClipDuration(maxDuration);
+
+        // Adjust start if region would exceed total duration
+        if (regionStart + maxDuration > totalDuration) {
+            setRegionStart(Math.max(0, totalDuration - maxDuration));
+        }
+    };
+
+    // Handle region drag via slider
+    const handleRegionSlide = (newStart) => {
+        const maxStart = Math.max(0, totalDuration - clipDuration);
+        setRegionStart(Math.min(newStart, maxStart));
+    };
+
+    // Render upload state
+    if (!file) {
+        return (
+            <div>
+                <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="audio/*"
+                    onChange={handleFileSelect}
+                    style={{ display: 'none' }}
+                />
+                <button
+                    onClick={() => fileInputRef.current?.click()}
+                    style={{
+                        width: '100%',
+                        padding: '20px',
+                        borderRadius: '10px',
+                        border: '2px dashed #3a3a3a',
+                        backgroundColor: 'transparent',
+                        color: '#666',
+                        fontSize: '13px',
+                        cursor: 'pointer',
+                        transition: 'border-color 0.2s',
+                    }}
+                    onMouseOver={e => e.target.style.borderColor = '#10B981'}
+                    onMouseOut={e => e.target.style.borderColor = '#3a3a3a'}
+                >
+                    Click to upload reference audio
+                </button>
+                {error && <div style={{ color: '#EF4444', fontSize: '12px', marginTop: '8px' }}>{error}</div>}
+            </div>
+        );
+    }
+
+    // Render accepted state
+    if (isAccepted) {
+        return (
+            <div style={{
+                backgroundColor: '#1e1e1e',
+                borderRadius: '10px',
+                padding: '14px',
+                border: '1px solid #10B981',
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{ fontSize: '18px' }}>&#x2713;</span>
+                        <div>
+                            <div style={{ fontSize: '13px', color: '#e0e0e0' }}>{file.name}</div>
+                            <div style={{ fontSize: '11px', color: '#10B981' }}>
+                                {formatTime(regionStart)} - {formatTime(regionStart + clipDuration)} ({clipDuration}s clip)
+                            </div>
+                        </div>
+                    </div>
+                    <button
+                        onClick={handleClear}
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#666',
+                            cursor: 'pointer',
+                            fontSize: '16px',
+                            padding: '4px 8px',
+                        }}
+                    >x</button>
+                </div>
+            </div>
+        );
+    }
+
+    // Render trimmer UI
+    return (
+        <div>
+            {/* File info */}
+            <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                backgroundColor: '#1e1e1e',
+                padding: '10px 14px',
+                borderRadius: '10px',
+                marginBottom: '12px',
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span style={{ fontSize: '16px' }}>&#x1F3B5;</span>
+                    <span style={{ fontSize: '13px', color: '#e0e0e0', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {file.name}
+                    </span>
+                </div>
+                <button
+                    onClick={handleClear}
+                    style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#666',
+                        cursor: 'pointer',
+                        fontSize: '16px',
+                    }}
+                >x</button>
+            </div>
+
+            {/* Duration input */}
+            <div style={{ marginBottom: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                    <span style={{ fontSize: '12px', color: '#666' }}>Clip Duration</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <input
+                            type="number"
+                            min="1"
+                            max={Math.floor(totalDuration) || 60}
+                            value={clipDuration}
+                            onChange={e => handleDurationChange(parseInt(e.target.value) || 1)}
+                            style={{
+                                width: '50px',
+                                backgroundColor: '#1e1e1e',
+                                border: '1px solid #3a3a3a',
+                                borderRadius: '6px',
+                                padding: '6px 8px',
+                                color: '#10B981',
+                                fontSize: '13px',
+                                textAlign: 'center',
+                                outline: 'none',
+                            }}
+                        />
+                        <span style={{ fontSize: '12px', color: '#666' }}>seconds</span>
+                    </div>
+                </div>
+            </div>
+
+            {/* Waveform container */}
+            <div className="waveform-container" style={{ position: 'relative' }}>
+                {isLoading && (
+                    <div style={{
+                        position: 'absolute',
+                        top: 0, left: 0, right: 0, bottom: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: 'rgba(26, 26, 26, 0.8)',
+                        borderRadius: '8px',
+                        zIndex: 10,
+                    }}>
+                        <span style={{ color: '#10B981', fontSize: '13px' }}>Loading...</span>
+                    </div>
+                )}
+                <div ref={waveformRef} />
+
+                {/* Region overlay visualization */}
+                {totalDuration > 0 && (
+                    <div style={{
+                        position: 'absolute',
+                        top: '12px',
+                        left: `calc(12px + ${(regionStart / totalDuration) * 100}%)`,
+                        width: `${(clipDuration / totalDuration) * 100}%`,
+                        height: '80px',
+                        backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                        border: '2px solid #10B981',
+                        borderRadius: '4px',
+                        pointerEvents: 'none',
+                        maxWidth: 'calc(100% - 24px)',
+                    }} />
+                )}
+            </div>
+
+            {/* Region slider */}
+            {totalDuration > 0 && (
+                <div style={{ marginTop: '12px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                        <span style={{ fontSize: '11px', color: '#888' }}>
+                            Selection: {formatTime(regionStart)} - {formatTime(regionStart + clipDuration)}
+                        </span>
+                        <span style={{ fontSize: '11px', color: '#666' }}>
+                            Total: {formatTime(totalDuration)}
+                        </span>
+                    </div>
+                    <input
+                        type="range"
+                        min="0"
+                        max={Math.max(0, totalDuration - clipDuration)}
+                        step="0.1"
+                        value={regionStart}
+                        onChange={e => handleRegionSlide(parseFloat(e.target.value))}
+                        style={{ width: '100%' }}
+                    />
+                </div>
+            )}
+
+            {/* Controls */}
+            <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                <button
+                    onClick={handlePreview}
+                    disabled={isLoading || totalDuration === 0}
+                    style={{
+                        flex: 1,
+                        padding: '10px',
+                        borderRadius: '8px',
+                        border: '1px solid #3a3a3a',
+                        backgroundColor: '#2a2a2a',
+                        color: isPlaying ? '#10B981' : '#e0e0e0',
+                        fontSize: '13px',
+                        cursor: isLoading ? 'not-allowed' : 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '6px',
+                    }}
+                >
+                    {isPlaying ? (
+                        <>
+                            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                                <rect x="2" y="1" width="3" height="10" rx="1" />
+                                <rect x="7" y="1" width="3" height="10" rx="1" />
+                            </svg>
+                            Stop
+                        </>
+                    ) : (
+                        <>
+                            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                                <path d="M2 1.5v9l8-4.5-8-4.5z" />
+                            </svg>
+                            Preview
+                        </>
+                    )}
+                </button>
+                <button
+                    onClick={handleAccept}
+                    disabled={isLoading || totalDuration === 0}
+                    style={{
+                        flex: 1,
+                        padding: '10px',
+                        borderRadius: '8px',
+                        border: 'none',
+                        backgroundColor: '#10B981',
+                        color: '#fff',
+                        fontSize: '13px',
+                        fontWeight: '500',
+                        cursor: isLoading ? 'not-allowed' : 'pointer',
+                        opacity: isLoading ? 0.7 : 1,
+                    }}
+                >
+                    {isLoading ? 'Processing...' : 'Accept'}
+                </button>
+            </div>
+
+            {error && <div style={{ color: '#EF4444', fontSize: '12px', marginTop: '8px' }}>{error}</div>}
         </div>
     );
 };
@@ -738,7 +1297,6 @@ const App = () => {
     const [elapsedTime, setElapsedTime] = useState(0);
     const [gpuInfo, setGpuInfo] = useState(null);
     const pollRef = useRef(null);
-    const fileRef = useRef(null);
     const addBtnRef = useRef(null);
     const timerRef = useRef(null);
 
@@ -861,31 +1419,6 @@ const App = () => {
                 setLibrary(data.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
             }
         } catch (e) { console.error(e); }
-    };
-
-    const uploadReference = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        setRefFile(file);
-        setError(null);
-        const fd = new FormData();
-        fd.append('file', file);
-        try {
-            const r = await fetch('/api/upload-reference', { method: 'POST', body: fd });
-            if (!r.ok) throw new Error(await r.text());
-            const data = await r.json();
-            setRefId(data.id);
-            setUseReference(true);
-        } catch (e) {
-            setError(e.message);
-            setRefFile(null);
-        }
-    };
-
-    const clearReference = () => {
-        setRefFile(null);
-        setRefId(null);
-        setUseReference(false);
     };
 
     const poll = useCallback(async (id) => {
@@ -1220,43 +1753,21 @@ const App = () => {
                             </div>
                         </Card>
 
-                        {/* Reference Audio */}
+                        {/* Reference Audio with Waveform Trimmer */}
                         <Card>
                             <CardTitle>Reference Audio</CardTitle>
-                            <input ref={fileRef} type="file" accept="audio/*" onChange={uploadReference} style={{ display: 'none' }} />
-                            {refFile ? (
-                                <div style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '12px',
-                                    backgroundColor: '#1e1e1e',
-                                    padding: '12px 14px',
-                                    borderRadius: '10px',
-                                    border: '1px solid #3a3a3a',
-                                }}>
-                                    <div style={{ fontSize: '18px' }}>&#x1F3B5;</div>
-                                    <div style={{ flex: 1, overflow: 'hidden' }}>
-                                        <div style={{ fontSize: '13px', color: '#e0e0e0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{refFile.name}</div>
-                                    </div>
-                                    <button onClick={clearReference} style={{ background: 'transparent', border: 'none', color: '#666', cursor: 'pointer', fontSize: '16px' }}>x</button>
-                                </div>
-                            ) : (
-                                <button
-                                    onClick={() => fileRef.current?.click()}
-                                    style={{
-                                        width: '100%',
-                                        padding: '16px',
-                                        borderRadius: '10px',
-                                        border: '2px dashed #3a3a3a',
-                                        backgroundColor: 'transparent',
-                                        color: '#666',
-                                        fontSize: '13px',
-                                        cursor: 'pointer',
-                                    }}
-                                >
-                                    Click to upload reference
-                                </button>
-                            )}
+                            <AudioTrimmer
+                                onAccept={(data) => {
+                                    setRefId(data.id);
+                                    setRefFile({ name: data.fileName });
+                                    setUseReference(true);
+                                }}
+                                onClear={() => {
+                                    setRefId(null);
+                                    setRefFile(null);
+                                    setUseReference(false);
+                                }}
+                            />
                         </Card>
 
                         {/* Output */}

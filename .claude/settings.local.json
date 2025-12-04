@@ -9,7 +9,10 @@
       "Bash(python:*)",
       "WebFetch(domain:api.github.com)",
       "Bash(uv pip install:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(git push:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []

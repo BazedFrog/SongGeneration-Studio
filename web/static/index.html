@@ -1474,9 +1474,9 @@ const SectionCard = ({ section, onUpdate, onRemove }) => {
     );
 };
 
-const LibraryItem = ({ item }) => {
+const LibraryItem = ({ item, isQueued, queuePosition, onRemoveFromQueue }) => {
     const [expanded, setExpanded] = useState(false);
-    const meta = item.metadata || {};
+    const meta = isQueued ? item : (item.metadata || {});
 
     const formatDate = (dateStr) => {
         if (!dateStr) return 'Unknown';
@@ -1506,10 +1506,10 @@ const LibraryItem = ({ item }) => {
         }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '15px', fontWeight: '500', color: '#e0e0e0' }}>{item.title || 'Untitled'}</div>
+                    <div style={{ fontSize: '15px', fontWeight: '500', color: '#e0e0e0' }}>{isQueued ? (item.title || 'Untitled') : (item.title || 'Untitled')}</div>
                     <div style={{ fontSize: '12px', color: '#888', marginTop: '4px' }}>
-                        {formatDate(item.created_at)}
-                        {meta.model && <span style={{ marginLeft: '12px', color: '#666' }}>{meta.model}</span>}
+                        {isQueued ? `Queue position: #${queuePosition}` : formatDate(item.created_at)}
+                        {(isQueued ? item.model : meta.model) && <span style={{ marginLeft: '12px', color: '#666' }}>{isQueued ? item.model : meta.model}</span>}
                     </div>
                     {/* Style tags */}
                     <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
@@ -1519,7 +1519,30 @@ const LibraryItem = ({ item }) => {
                         {meta.bpm && <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '11px', backgroundColor: '#10B98120', color: '#10B981' }}>{meta.bpm} BPM</span>}
                     </div>
                 </div>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>{item.status === 'completed' && item.output_files?.length > 0 && (<>{['FLAC', 'MP3'].map((fmt) => (<button key={fmt} onClick={() => { const a = document.createElement('a'); a.href = `/api/audio/${item.id}/0?format=${fmt.toLowerCase()}`; a.download = `${item.title || 'song'}.${fmt.toLowerCase()}`; a.click(); }} style={{ background: 'none', border: '1px solid #10B981', borderRadius: '6px', padding: '4px 10px', color: '#10B981', cursor: 'pointer', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>{fmt}</button>))}</>)}
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    {!isQueued && item.status === 'completed' && item.output_files?.length > 0 && (<>{['FLAC', 'MP3'].map((fmt) => (<button key={fmt} onClick={() => { const a = document.createElement('a'); a.href = `/api/audio/${item.id}/0?format=${fmt.toLowerCase()}`; a.download = `${item.title || 'song'}.${fmt.toLowerCase()}`; a.click(); }} style={{ background: 'none', border: '1px solid #10B981', borderRadius: '6px', padding: '4px 10px', color: '#10B981', cursor: 'pointer', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>{fmt}</button>))}</>)}
+                    {isQueued && (
+                        <button
+                            onClick={onRemoveFromQueue}
+                            style={{
+                                background: 'none',
+                                border: '1px solid #EF4444',
+                                borderRadius: '6px',
+                                padding: '4px 10px',
+                                color: '#EF4444',
+                                cursor: 'pointer',
+                                fontSize: '12px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                            }}
+                        >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M18 6L6 18M6 6l12 12"/>
+                            </svg>
+                            Remove
+                        </button>
+                    )}
                     <button
                         onClick={() => setExpanded(!expanded)}
                         style={{
@@ -1539,16 +1562,16 @@ const LibraryItem = ({ item }) => {
                         borderRadius: '6px',
                         fontSize: '11px',
                         fontWeight: '500',
-                        backgroundColor: item.status === 'completed' ? '#10B98120' : item.status === 'failed' ? '#EF444420' : '#F59E0B20',
-                        color: item.status === 'completed' ? '#10B981' : item.status === 'failed' ? '#EF4444' : '#F59E0B',
+                        backgroundColor: isQueued ? '#6366F120' : (item.status === 'completed' ? '#10B98120' : item.status === 'failed' ? '#EF444420' : '#F59E0B20'),
+                        color: isQueued ? '#6366F1' : (item.status === 'completed' ? '#10B981' : item.status === 'failed' ? '#EF4444' : '#F59E0B'),
                     }}>
-                        {item.status}
+                        {isQueued ? 'queued' : item.status}
                     </span>
                 </div>
             </div>
 
             {/* Audio players */}
-            {item.status === 'completed' && item.output_files?.map((f, i) => (
+            {!isQueued && item.status === 'completed' && item.output_files?.map((f, i) => (
                 <DarkAudioPlayer key={i} src={`/api/audio/${item.id}/${i}`} />
             ))}
 
@@ -1572,8 +1595,8 @@ const LibraryItem = ({ item }) => {
                     <div><span style={{ color: '#666' }}>Timbre:</span> <span style={{ color: '#aaa' }}>{meta.timbre || '-'}</span></div>
                     <div><span style={{ color: '#666' }}>Instruments:</span> <span style={{ color: '#aaa' }}>{meta.instruments || '-'}</span></div>
                     {meta.custom_style && <div style={{ gridColumn: '1 / -1' }}><span style={{ color: '#666' }}>Custom Style:</span> <span style={{ color: '#aaa' }}>{meta.custom_style}</span></div>}
-                    <div style={{ gridColumn: '1 / -1' }}><span style={{ color: '#666' }}>Created:</span> <span style={{ color: '#aaa' }}>{formatDate(meta.created_at)}</span></div>
-                    {meta.completed_at && (
+                    {!isQueued && <div style={{ gridColumn: '1 / -1' }}><span style={{ color: '#666' }}>Created:</span> <span style={{ color: '#aaa' }}>{formatDate(meta.created_at)}</span></div>}
+                    {!isQueued && meta.completed_at && (
                         <div style={{ gridColumn: '1 / -1' }}><span style={{ color: '#666' }}>Completed:</span> <span style={{ color: '#aaa' }}>{formatDate(meta.completed_at)} ({formatDuration(meta.created_at, meta.completed_at)})</span></div>
                     )}
                     {meta.description && (
@@ -1595,7 +1618,7 @@ const LibraryItem = ({ item }) => {
                             </div>
                         </div>
                     )}
-                    {meta.reference_audio && (
+                    {(meta.reference_audio || meta.reference_audio_id) && (
                         <div style={{ gridColumn: '1 / -1' }}><span style={{ color: '#666' }}>Reference Audio:</span> <span style={{ color: '#F59E0B' }}>Yes (style cloning)</span></div>
                     )}
                 </div>
@@ -1918,6 +1941,11 @@ const App = () => {
     // Clear the queue
     const clearQueue = () => {
         setQueue([]);
+    };
+
+    // Remove specific item from queue by index
+    const removeFromQueue = (index) => {
+        setQueue(prev => prev.filter((_, i) => i !== index));
     };
 
     const toggleAddMenu = (e) => {
@@ -2469,13 +2497,25 @@ const App = () => {
                 <div style={{ maxWidth: '900px', margin: '0 auto', padding: '0 24px' }}>
                     <h2 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '20px', color: '#e0e0e0' }}>
                         Your Songs ({library.filter(l => l.status === 'completed').length})
+                        {queue.length > 0 && <span style={{ color: '#6366F1', fontWeight: '400', fontSize: '14px', marginLeft: '12px' }}>+ {queue.length} in queue</span>}
                     </h2>
-                    {library.length === 0 ? (
+                    {library.length === 0 && queue.length === 0 ? (
                         <div style={{ textAlign: 'center', padding: '60px', color: '#666' }}>
                             No songs generated yet. Start creating!
                         </div>
                     ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            {/* Queued items first */}
+                            {queue.map((item, index) => (
+                                <LibraryItem
+                                    key={`queue-${index}`}
+                                    item={item}
+                                    isQueued={true}
+                                    queuePosition={index + 1}
+                                    onRemoveFromQueue={() => removeFromQueue(index)}
+                                />
+                            ))}
+                            {/* Library items */}
                             {library.map(item => <LibraryItem key={item.id} item={item} />)}
                         </div>
                     )}
@@ -2537,7 +2577,9 @@ const App = () => {
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
+                        justifyContent: 'center',
                         gap: '8px',
+                        minWidth: '130px',
                     }}
                 >
                     {generating ? (
@@ -2545,7 +2587,7 @@ const App = () => {
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                 <path d="M12 5v14M5 12h14"/>
                             </svg>
-                            Queue{queue.length > 0 ? ` (${queue.length})` : ''}
+                            Queue
                         </>
                     ) : 'Generate'}
                 </button>

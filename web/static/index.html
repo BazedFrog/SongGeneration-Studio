@@ -2143,7 +2143,7 @@ const App = () => {
                 overflowX: 'hidden',
             }}>
                 {/* Create View */}
-                <div style={{ display: activeTab === 'create' ? 'block' : 'none' }}>
+                <div style={{ display: activeTab === 'create' ? 'block' : 'none', paddingBottom: '80px' }}>
                     <div style={{ display: 'flex', gap: '24px', maxWidth: '1400px', margin: '0 auto', padding: '0 24px 24px 24px' }}>
                     {/* Sidebar */}
                     <aside style={{ width: '320px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -2633,13 +2633,20 @@ const App = () => {
 
             {/* Footer - only show on Create tab */}
             <footer style={{
-                backgroundColor: '#232323',
-                borderTop: '1px solid #333',
+                position: 'fixed',
+                bottom: 0,
+                left: 0,
+                right: 0,
+                background: 'linear-gradient(135deg, rgba(30, 30, 30, 0.5) 0%, rgba(40, 40, 45, 0.45) 100%)',
+                backdropFilter: 'blur(20px)',
+                WebkitBackdropFilter: 'blur(20px)',
+                borderTop: '1px solid rgba(255, 255, 255, 0.08)',
                 padding: '14px 24px',
                 display: activeTab === 'create' ? 'flex' : 'none',
                 alignItems: 'center',
                 gap: '12px',
-                flexShrink: 0,
+                boxShadow: '0 -4px 30px rgba(0, 0, 0, 0.4)',
+                zIndex: 100,
             }}>
                 {/* Generate / Add to Queue button */}
                 <button

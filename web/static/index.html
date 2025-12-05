@@ -311,6 +311,7 @@ const AudioTrimmer = ({ onAccept, onClear, onFileLoad }) => {
     const [isAccepted, setIsAccepted] = useState(false);
     const [isExpanded, setIsExpanded] = useState(false);
     const [waveformPeaks, setWaveformPeaks] = useState([]);
+    const [isDragging, setIsDragging] = useState(false);
     const [error, setError] = useState(null);
 
     const waveformRef = useRef(null);
@@ -320,6 +321,39 @@ const AudioTrimmer = ({ onAccept, onClear, onFileLoad }) => {
     const audioContextRef = useRef(null);
     const audioBufferRef = useRef(null);
     const playIntervalRef = useRef(null);
+
+    // Handle drag/click on waveform to move selection
+    const handleWaveformInteraction = (e, containerRef, padding = 12) => {
+        if (totalDuration <= 0 || isLoading) return;
+        const rect = containerRef.getBoundingClientRect();
+        const clickX = e.clientX - rect.left - padding;
+        const containerWidth = rect.width - (padding * 2);
+        const clickPercent = Math.max(0, Math.min(1, clickX / containerWidth));
+        const clickTime = clickPercent * totalDuration;
+        const newStart = Math.max(0, Math.min(totalDuration - clipDuration, clickTime - clipDuration / 2));
+        setRegionStart(newStart);
+    };
+
+    const handleMouseDown = (e, containerRef, padding) => {
+        setIsDragging(true);
+        handleWaveformInteraction(e, containerRef, padding);
+    };
+
+    const handleMouseMove = (e, containerRef, padding) => {
+        if (!isDragging) return;
+        handleWaveformInteraction(e, containerRef, padding);
+    };
+
+    const handleMouseUp = () => {
+        setIsDragging(false);
+    };
+
+    // Global mouse up listener to stop dragging
+    useEffect(() => {
+        const handleGlobalMouseUp = () => setIsDragging(false);
+        window.addEventListener('mouseup', handleGlobalMouseUp);
+        return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
+    }, []);
 
     const formatTime = (seconds) => {
         if (!seconds || isNaN(seconds)) return '0:00';
@@ -345,14 +379,15 @@ const AudioTrimmer = ({ onAccept, onClear, onFileLoad }) => {
             container: waveformRef.current,
             waveColor: '#4a4a4a',
             progressColor: '#4a4a4a',  // Same as waveColor - we use overlay for selection
-            cursorColor: '#10B981',
-            cursorWidth: 2,
+            cursorColor: 'transparent',  // Hide cursor - we use our own selection overlay
+            cursorWidth: 0,
             height: 80,
             barWidth: 2,
             barGap: 1,
             barRadius: 2,
             normalize: true,
             backend: 'WebAudio',
+            interact: false,  // Disable WaveSurfer's own click handling
         });
 
         wavesurferRef.current = ws;
@@ -810,18 +845,16 @@ const AudioTrimmer = ({ onAccept, onClear, onFileLoad }) => {
 
                 <div
                     className="waveform-container"
-                    style={{ position: 'relative', overflow: 'hidden', cursor: totalDuration > 0 ? 'pointer' : 'default' }}
-                    onClick={(e) => {
-                        if (totalDuration <= 0 || isLoading) return;
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        const clickX = e.clientX - rect.left - 12; // Account for padding
-                        const containerWidth = rect.width - 24; // Account for padding
-                        const clickPercent = Math.max(0, Math.min(1, clickX / containerWidth));
-                        const clickTime = clickPercent * totalDuration;
-                        // Center the selection on click point
-                        const newStart = Math.max(0, Math.min(totalDuration - clipDuration, clickTime - clipDuration / 2));
-                        setRegionStart(newStart);
+                    style={{
+                        position: 'relative',
+                        overflow: 'hidden',
+                        cursor: totalDuration > 0 ? (isDragging ? 'grabbing' : 'pointer') : 'default',
+                        userSelect: 'none',
                     }}
+                    onMouseDown={(e) => handleMouseDown(e, e.currentTarget, 12)}
+                    onMouseMove={(e) => handleMouseMove(e, e.currentTarget, 12)}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseUp}
                 >
                     {isLoading && (
                         <div style={{
@@ -938,19 +971,14 @@ const AudioTrimmer = ({ onAccept, onClear, onFileLoad }) => {
                                 backgroundColor: '#1a1a1a',
                                 borderRadius: '12px',
                                 padding: '20px',
-                                cursor: 'pointer',
+                                cursor: totalDuration > 0 ? (isDragging ? 'grabbing' : 'pointer') : 'default',
                                 position: 'relative',
+                                userSelect: 'none',
                             }}
-                            onClick={(e) => {
-                                if (totalDuration <= 0) return;
-                                const rect = e.currentTarget.getBoundingClientRect();
-                                const clickX = e.clientX - rect.left - 20;
-                                const containerWidth = rect.width - 40;
-                                const clickPercent = Math.max(0, Math.min(1, clickX / containerWidth));
-                                const clickTime = clickPercent * totalDuration;
-                                const newStart = Math.max(0, Math.min(totalDuration - clipDuration, clickTime - clipDuration / 2));
-                                setRegionStart(newStart);
-                            }}
+                            onMouseDown={(e) => handleMouseDown(e, e.currentTarget, 20)}
+                            onMouseMove={(e) => handleMouseMove(e, e.currentTarget, 20)}
+                            onMouseUp={handleMouseUp}
+                            onMouseLeave={handleMouseUp}
                         >
                             {/* Real waveform visualization for expanded view */}
                             <div style={{ height: '120px', position: 'relative' }}>
@@ -972,7 +1000,6 @@ const AudioTrimmer = ({ onAccept, onClear, onFileLoad }) => {
                                                     height: `${Math.max(5, peak)}%`,
                                                     backgroundColor: inSelection ? '#10B981' : '#4a4a4a',
                                                     borderRadius: '1px',
-                                                    transition: 'background-color 0.1s',
                                                 }}
                                             />
                                         );

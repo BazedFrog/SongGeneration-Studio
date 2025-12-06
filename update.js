@@ -33,6 +33,27 @@ module.exports = {
     {
       method: "fs.copy",
       params: {
+        src: "web/static/styles.css",
+        dest: "app/web/static/styles.css"
+      }
+    },
+    {
+      method: "fs.copy",
+      params: {
+        src: "web/static/components.js",
+        dest: "app/web/static/components.js"
+      }
+    },
+    {
+      method: "fs.copy",
+      params: {
+        src: "web/static/app.js",
+        dest: "app/web/static/app.js"
+      }
+    },
+    {
+      method: "fs.copy",
+      params: {
         src: "web/static/Logo_1.png",
         dest: "app/web/static/Logo_1.png"
       }

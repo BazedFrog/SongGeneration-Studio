@@ -18,13 +18,14 @@
 <script>
 // Load and transform JSX files in order
 async function loadApp() {
+    const cacheBust = 'v=' + Date.now();
     try {
         // Load components first
-        const componentsRes = await fetch('/static/components.js');
+        const componentsRes = await fetch('/static/components.js?' + cacheBust);
         const componentsCode = await componentsRes.text();
 
         // Load app
-        const appRes = await fetch('/static/app.js');
+        const appRes = await fetch('/static/app.js?' + cacheBust);
         const appCode = await appRes.text();
 
         // Transform and execute components

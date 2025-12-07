@@ -1129,28 +1129,34 @@ var App = () => {
                                                 borderRadius: '8px',
                                                 padding: '10px',
                                                 border: '1px solid #3a3a3a',
+                                                display: 'flex',
+                                                gap: '10px',
+                                                alignItems: 'center',
                                             }}>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                                                    <div style={{
-                                                        width: '16px',
-                                                        height: '16px',
-                                                        borderRadius: '4px',
-                                                        backgroundColor: '#6366F1',
-                                                        display: 'flex',
-                                                        alignItems: 'center',
-                                                        justifyContent: 'center',
-                                                        fontSize: '9px',
-                                                        fontWeight: '600',
-                                                        color: '#fff',
-                                                    }}>{index + 1}</div>
-                                                    <span className="text-base font-medium text-primary truncate" style={{ flex: 1 }}>
+                                                {/* Album Cover with Queue Number */}
+                                                <div style={{
+                                                    width: '44px',
+                                                    height: '44px',
+                                                    borderRadius: '6px',
+                                                    backgroundColor: '#6366F1',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    flexShrink: 0,
+                                                    fontSize: '16px',
+                                                    fontWeight: '600',
+                                                    color: '#fff',
+                                                }}>{index + 1}</div>
+                                                {/* Song Info */}
+                                                <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                                                    <div className="text-sm font-medium text-primary truncate" style={{ marginBottom: '2px' }}>
                                                         {item.title || 'Untitled'}
-                                                    </span>
-                                                    <button onClick={() => removeFromQueue(index)} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', padding: '2px', display: 'flex' }}>
-                                                        <CloseIcon />
-                                                    </button>
+                                                    </div>
+                                                    <div className="text-xs text-muted">In queue</div>
                                                 </div>
-                                                <div className="text-xs text-muted">In queue</div>
+                                                <button onClick={(e) => { e.stopPropagation(); removeFromQueue(index); }} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', padding: '4px', display: 'flex', flexShrink: 0 }}>
+                                                    <CloseIcon />
+                                                </button>
                                             </div>
                                         ))}
 
@@ -1161,9 +1167,13 @@ var App = () => {
                                                 borderRadius: '8px',
                                                 padding: '10px',
                                                 border: '1px solid #10B981',
+                                                display: 'flex',
+                                                gap: '10px',
+                                                alignItems: 'center',
                                                 position: 'relative',
                                                 overflow: 'hidden',
                                             }}>
+                                                {/* Progress background */}
                                                 <div style={{
                                                     position: 'absolute',
                                                     top: 0,
@@ -1172,23 +1182,30 @@ var App = () => {
                                                     width: estimatedTime > 0 ? `${Math.min((elapsedTime / estimatedTime) * 100, 100)}%` : '30%',
                                                     background: 'linear-gradient(90deg, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0.05) 100%)',
                                                     transition: 'width 0.5s ease',
+                                                    zIndex: 0,
                                                 }} />
-                                                <div style={{ position: 'relative', zIndex: 1 }}>
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                                                        <div style={{
-                                                            width: '8px',
-                                                            height: '8px',
-                                                            borderRadius: '50%',
-                                                            backgroundColor: '#10B981',
-                                                            animation: 'pulse 1.5s infinite',
-                                                        }} />
-                                                        <span className="text-base font-medium text-primary truncate" style={{ flex: 1 }}>
-                                                            {currentGenPayload.title || 'Untitled'}
-                                                        </span>
+                                                {/* Album Cover with Spinner */}
+                                                <div style={{
+                                                    width: '44px',
+                                                    height: '44px',
+                                                    borderRadius: '6px',
+                                                    backgroundColor: '#10B981',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    flexShrink: 0,
+                                                    position: 'relative',
+                                                    zIndex: 1,
+                                                }}>
+                                                    <SpinnerIcon />
+                                                </div>
+                                                {/* Song Info */}
+                                                <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', position: 'relative', zIndex: 1 }}>
+                                                    <div className="text-sm font-medium text-primary truncate" style={{ marginBottom: '2px' }}>
+                                                        {currentGenPayload.title || 'Untitled'}
                                                     </div>
-                                                    <div className="text-xs text-secondary flex justify-between">
-                                                        <span>Generating...</span>
-                                                        <span>{formatTime(elapsedTime)}{estimatedTime > 0 ? ` / ~${formatTime(estimatedTime)}` : ''}</span>
+                                                    <div className="text-xs text-secondary">
+                                                        {formatTime(elapsedTime)}{estimatedTime > 0 ? ` / ~${formatTime(estimatedTime)}` : ''}
                                                     </div>
                                                 </div>
                                             </div>
@@ -1199,27 +1216,48 @@ var App = () => {
                                             const meta = item.metadata || {};
                                             const isPlaying = activityPlayingId === item.id;
                                             const canPlay = item.status === 'completed' && (item.output_file || (item.output_files && item.output_files.length > 0));
+                                            const isFailed = item.status === 'failed' || item.status === 'stopped';
                                             return (
                                                 <div key={item.id}
-                                                    className={`activity-item ${isPlaying ? 'active' : ''} ${item.status === 'failed' || item.status === 'stopped' ? 'error' : ''}`}
-                                                    style={{ cursor: canPlay ? 'pointer' : 'default' }}
+                                                    className={`activity-item ${isPlaying ? 'active' : ''} ${isFailed ? 'error' : ''}`}
+                                                    style={{ cursor: canPlay ? 'pointer' : 'default', display: 'flex', gap: '10px', alignItems: 'center' }}
                                                     onClick={() => canPlay && playActivityAudio(item)}
                                                 >
-                                                    <div className="flex items-center gap-2" style={{ marginBottom: '4px' }}>
-                                                        {canPlay && (
-                                                            <div style={{ width: '14px', height: '14px', borderRadius: '50%', backgroundColor: isPlaying ? '#10B981' : '#3a3a3a', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                                                                {isPlaying && isAudioPlaying ? <PauseLargeIcon size={6} /> : <PlayLargeIcon size={6} color={isPlaying ? '#fff' : '#888'} />}
-                                                            </div>
+                                                    {/* Album Cover */}
+                                                    <div style={{
+                                                        width: '44px',
+                                                        height: '44px',
+                                                        borderRadius: '6px',
+                                                        backgroundColor: isPlaying ? '#10B981' : isFailed ? '#EF4444' : '#2a2a2a',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        flexShrink: 0,
+                                                        transition: 'all 0.15s',
+                                                    }}>
+                                                        {canPlay ? (
+                                                            isPlaying && isAudioPlaying ? (
+                                                                <PauseLargeIcon size={16} color="#fff" />
+                                                            ) : (
+                                                                <PlayLargeIcon size={16} color={isPlaying ? '#fff' : '#888'} style={{ marginLeft: '2px' }} />
+                                                            )
+                                                        ) : isFailed ? (
+                                                            <CloseIcon color="#fff" />
+                                                        ) : (
+                                                            <MusicNoteIcon size={16} color="#666" />
                                                         )}
-                                                        {!canPlay && (item.status === 'failed' || item.status === 'stopped') && <CloseIcon color="#EF4444" />}
-                                                        <span className="text-base font-medium text-primary truncate">{meta.title || 'Untitled'}</span>
                                                     </div>
-                                                    <div className="text-xs text-secondary truncate" style={{ marginBottom: '2px' }}>
-                                                        {[meta.genre, meta.mood, meta.timbre, meta.instrument].filter(Boolean).join(' • ') || 'No tags'}
-                                                    </div>
-                                                    <div className="text-xs text-muted flex justify-between">
-                                                        <span>{meta.reference_audio_id ? '🎵 Reference' : ''}</span>
-                                                        <span>{new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                                    {/* Song Info */}
+                                                    <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                                                        <div className="text-sm font-medium text-primary truncate" style={{ marginBottom: '2px' }}>
+                                                            {meta.title || 'Untitled'}
+                                                        </div>
+                                                        <div className="text-xs text-secondary truncate" style={{ marginBottom: '2px' }}>
+                                                            {[meta.genre, meta.emotion].filter(Boolean).join(' • ') || 'No tags'}
+                                                        </div>
+                                                        <div className="text-xs text-muted">
+                                                            {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                        </div>
                                                     </div>
                                                 </div>
                                             );

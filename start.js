@@ -6,7 +6,8 @@ module.exports = {
       params: {
         venv: "env",
         env: {
-          PYTHONPATH: "{{cwd}}/app;{{cwd}}/app/codeclm/tokenizer/Flow1dVAE",
+          // Use platform-specific path separator: semicolon for Windows, colon for Unix
+          PYTHONPATH: "{{platform === 'win32' ? cwd + '/app;' + cwd + '/app/codeclm/tokenizer/Flow1dVAE' : cwd + '/app:' + cwd + '/app/codeclm/tokenizer/Flow1dVAE'}}",
           PYTHONUTF8: "1"
         },
         path: "app",

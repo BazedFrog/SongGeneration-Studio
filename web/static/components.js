@@ -1216,24 +1216,49 @@ var EditModal = ({ item, onClose, onSave }) => {
     const [coverPreview, setCoverPreview] = useState(null);
     const [coverFile, setCoverFile] = useState(null);
     const [saving, setSaving] = useState(false);
-    const [hasCover, setHasCover] = useState(false);
+    const [removeCover, setRemoveCover] = useState(false);  // Track if user wants to remove cover
+    // Initialize hasCover from metadata if available for immediate display
+    const [hasCover, setHasCover] = useState(() => {
+        return !!(item.metadata?.cover);
+    });
+    // Store existing cover URL to maintain it during edits
+    const [existingCoverUrl, setExistingCoverUrl] = useState(() => {
+        if (item.metadata?.cover) {
+            return `/api/generation/${item.id}/cover?t=${Date.now()}`;
+        }
+        return null;
+    });
     const fileInputRef = useRef(null);
 
-    // Check if cover exists on mount
+    // Check if cover exists on mount (fallback for cases where metadata doesn't have cover flag)
     useEffect(() => {
-        fetch(`/api/generation/${item.id}/cover`, { method: 'HEAD' })
-            .then(r => { if (r.ok) setHasCover(true); })
-            .catch(() => {});
-    }, [item.id]);
+        if (!hasCover && item.id) {
+            // Try to load the image directly - more reliable than HEAD request
+            const img = new Image();
+            img.onload = () => {
+                setHasCover(true);
+                setExistingCoverUrl(`/api/generation/${item.id}/cover?t=${Date.now()}`);
+            };
+            img.onerror = () => {}; // No cover exists, that's fine
+            img.src = `/api/generation/${item.id}/cover?t=${Date.now()}`;
+        }
+    }, [item.id, hasCover]);
 
     const handleFileSelect = (e) => {
         const file = e.target.files[0];
         if (file) {
             setCoverFile(file);
+            setRemoveCover(false);  // Reset remove flag when new file selected
             const reader = new FileReader();
             reader.onload = (e) => setCoverPreview(e.target.result);
             reader.readAsDataURL(file);
         }
+    };
+
+    const handleRemoveCover = () => {
+        setRemoveCover(true);
+        setCoverFile(null);
+        setCoverPreview(null);
     };
 
     const handleSave = async () => {
@@ -1246,8 +1271,14 @@ var EditModal = ({ item, onClose, onSave }) => {
                 body: JSON.stringify({ title })
             });
 
-            // Upload cover if selected
-            if (coverFile) {
+            // Handle cover: remove, replace, or keep
+            if (removeCover && !coverFile) {
+                // User wants to remove cover
+                await fetch(`/api/generation/${item.id}/cover`, {
+                    method: 'DELETE'
+                });
+            } else if (coverFile) {
+                // Upload new cover
                 const formData = new FormData();
                 formData.append('file', coverFile);
                 await fetch(`/api/generation/${item.id}/cover`, {
@@ -1328,13 +1359,41 @@ var EditModal = ({ item, onClose, onSave }) => {
                             justifyContent: 'center',
                             overflow: 'hidden',
                             flexShrink: 0,
+                            position: 'relative',
                         }}>
                             {coverPreview ? (
-                                <img src={coverPreview} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                            ) : hasCover ? (
-                                <img src={`/api/generation/${item.id}/cover?t=${Date.now()}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                <img src={coverPreview} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="New cover" />
+                            ) : (!removeCover && hasCover && existingCoverUrl) ? (
+                                <img src={existingCoverUrl} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="Album cover" />
                             ) : (
                                 <MusicNoteIcon size={32} color="#444" />
+                            )}
+                            {/* Trash icon - show when there's an image to remove */}
+                            {(coverPreview || (!removeCover && hasCover && existingCoverUrl)) && (
+                                <button
+                                    onClick={handleRemoveCover}
+                                    title="Remove cover"
+                                    style={{
+                                        position: 'absolute',
+                                        top: '4px',
+                                        right: '4px',
+                                        width: '22px',
+                                        height: '22px',
+                                        borderRadius: '50%',
+                                        backgroundColor: 'rgba(0,0,0,0.7)',
+                                        border: 'none',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        padding: 0,
+                                        transition: 'background-color 0.15s',
+                                    }}
+                                    onMouseEnter={e => e.target.style.backgroundColor = 'rgba(239,68,68,0.9)'}
+                                    onMouseLeave={e => e.target.style.backgroundColor = 'rgba(0,0,0,0.7)'}
+                                >
+                                    <TrashIcon size={12} color="#fff" />
+                                </button>
                             )}
                         </div>
                         {/* Upload Button */}
@@ -1423,6 +1482,8 @@ var LibraryItem = ({ item, isQueued, isGenerating, queuePosition, onRemoveFromQu
         }
         return null;
     });
+    // Track if we've already verified the cover
+    const coverCheckedRef = useRef(false);
 
     // Check for cover image - also watch metadata.cover for updates
     useEffect(() => {
@@ -1430,13 +1491,20 @@ var LibraryItem = ({ item, isQueued, isGenerating, queuePosition, onRemoveFromQu
             // If metadata already indicates a cover exists, use it directly
             if (meta.cover) {
                 setCoverUrl(`/api/generation/${item.id}/cover?t=${Date.now()}`);
+                coverCheckedRef.current = true;
             } else {
-                // Otherwise check via HEAD request
-                fetch(`/api/generation/${item.id}/cover`, { method: 'HEAD' })
-                    .then(r => {
-                        if (r.ok) setCoverUrl(`/api/generation/${item.id}/cover?t=${Date.now()}`);
-                    })
-                    .catch(() => {});
+                // Cover was removed or doesn't exist - clear the URL
+                setCoverUrl(null);
+                // Only do image check once per item if metadata doesn't have cover flag
+                if (!coverCheckedRef.current) {
+                    coverCheckedRef.current = true;
+                    const img = new Image();
+                    img.onload = () => {
+                        setCoverUrl(`/api/generation/${item.id}/cover?t=${Date.now()}`);
+                    };
+                    img.onerror = () => {}; // No cover, that's fine
+                    img.src = `/api/generation/${item.id}/cover?t=${Date.now()}`;
+                }
             }
         }
     }, [item.id, isQueued, isGenerating, meta.cover]);
@@ -1609,7 +1677,8 @@ var LibraryItem = ({ item, isQueued, isGenerating, queuePosition, onRemoveFromQu
                     item={item}
                     onClose={() => setEditing(false)}
                     onSave={() => {
-                        setCoverUrl(`/api/generation/${item.id}/cover?t=${Date.now()}`);
+                        // Reset coverCheckedRef so useEffect will re-check after library reloads
+                        coverCheckedRef.current = false;
                         onUpdate && onUpdate();
                     }}
                 />

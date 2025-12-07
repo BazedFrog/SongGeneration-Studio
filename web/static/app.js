@@ -1218,7 +1218,8 @@ var App = () => {
                                             const canPlay = item.status === 'completed' && (item.output_file || (item.output_files && item.output_files.length > 0));
                                             const isFailed = item.status === 'failed' || item.status === 'stopped';
                                             const hasCover = meta.cover;
-                                            const coverUrl = hasCover ? `/api/generation/${item.id}/cover` : null;
+                                            // Add timestamp for cache busting when library is refreshed
+                                            const coverUrl = hasCover ? `/api/generation/${item.id}/cover?v=${meta.cover}` : null;
                                             return (
                                                 <div key={item.id}
                                                     className={`activity-item ${isPlaying ? 'active' : ''} ${isFailed ? 'error' : ''}`}

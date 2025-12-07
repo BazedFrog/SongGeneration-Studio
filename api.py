@@ -220,7 +220,21 @@ def restore_library():
             file_mtime = datetime.fromtimestamp(audio_files[0].stat().st_mtime).isoformat()
         except:
             file_mtime = datetime.now().isoformat()
-            
+
+        # Check for cover image if not in metadata
+        if not metadata.get("cover"):
+            for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
+                cover_path = subdir / f"cover{ext}"
+                if cover_path.exists():
+                    metadata["cover"] = f"cover{ext}"
+                    # Update metadata file on disk too
+                    try:
+                        with open(metadata_path, 'w', encoding='utf-8') as f:
+                            json.dump(metadata, f, indent=2, ensure_ascii=False)
+                    except Exception as e:
+                        print(f"[LIBRARY] Warning: Could not update metadata for {gen_id}: {e}")
+                    break
+
         generations[gen_id] = {
             "id": gen_id,
             "status": "completed",
@@ -479,10 +493,11 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
         generations[gen_id]["message"] = "Starting inference..."
         generations[gen_id]["progress"] = 15
 
-        # Set up environment with correct PYTHONPATH
+        # Set up environment with correct PYTHONPATH (use os.pathsep for cross-platform)
         flow_vae_dir = BASE_DIR / "codeclm" / "tokenizer" / "Flow1dVAE"
         env = os.environ.copy()
-        env["PYTHONPATH"] = f"{BASE_DIR};{flow_vae_dir};{env.get('PYTHONPATH', '')}"
+        pathsep = os.pathsep  # ; on Windows, : on Unix
+        env["PYTHONPATH"] = f"{BASE_DIR}{pathsep}{flow_vae_dir}{pathsep}{env.get('PYTHONPATH', '')}"
         env["PYTHONUTF8"] = "1"
         # Add advanced params to environment
         env.update(adv_params)
@@ -960,6 +975,48 @@ async def get_cover(gen_id: str):
 
     raise HTTPException(404, "No cover image found")
 
+@app.delete("/api/generation/{gen_id}/cover")
+async def delete_cover(gen_id: str):
+    """Delete the album cover image for a generation."""
+    output_subdir = OUTPUT_DIR / gen_id
+
+    # Check if generation exists (in memory or on disk)
+    if gen_id not in generations and not output_subdir.exists():
+        raise HTTPException(404, "Generation not found")
+
+    # Find and delete cover file
+    deleted = False
+    for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
+        cover_path = output_subdir / f"cover{ext}"
+        if cover_path.exists():
+            cover_path.unlink()
+            deleted = True
+            print(f"[API] Deleted cover for {gen_id}: {cover_path}")
+            break
+
+    if not deleted:
+        raise HTTPException(404, "No cover image found")
+
+    # Update metadata
+    metadata_path = output_subdir / "metadata.json"
+    if metadata_path.exists():
+        try:
+            with open(metadata_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+            if "cover" in metadata:
+                del metadata["cover"]
+                with open(metadata_path, 'w', encoding='utf-8') as f:
+                    json.dump(metadata, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[API] Warning: Could not update metadata: {e}")
+
+    # Update in-memory generation if exists
+    if gen_id in generations:
+        if "metadata" in generations[gen_id] and "cover" in generations[gen_id]["metadata"]:
+            del generations[gen_id]["metadata"]["cover"]
+
+    return {"status": "deleted", "message": "Cover image deleted"}
+
 @app.get("/api/generation/{gen_id}/video")
 async def export_video(gen_id: str, background_tasks: BackgroundTasks):
     """Export generation as MP4 video with waveform visualization."""
@@ -1004,21 +1061,46 @@ async def export_video(gen_id: str, background_tasks: BackgroundTasks):
 
     # Find cover image or use default
     cover_path = None
+    has_custom_cover = False  # Track if user has a custom album cover
     for ext in ['.jpg', '.jpeg', '.png', '.webp']:
         cp = output_subdir / f"cover{ext}"
         if cp.exists():
             cover_path = cp
+            has_custom_cover = True
             break
-
-    if not cover_path:
-        # Use default background
-        cover_path = Path(__file__).parent / "web" / "static" / "default.jpg"
-        if not cover_path.exists():
-            raise HTTPException(500, "Default background image not found")
 
     # Create temp directory for video export
     temp_dir = Path(tempfile.gettempdir()) / "songgen_videos"
     temp_dir.mkdir(exist_ok=True)
+
+    if not cover_path:
+        # Use default background - check multiple possible locations
+        possible_defaults = [
+            Path(__file__).parent / "web" / "static" / "default.jpg",
+            Path(__file__).parent.parent / "web" / "static" / "default.jpg",
+            Path(__file__).parent / "static" / "default.jpg",
+        ]
+        for dp in possible_defaults:
+            if dp.exists():
+                cover_path = dp
+                break
+
+        if not cover_path:
+            # Generate a simple black background if no default found
+            print("[API] Warning: No default background image found, generating a black background")
+            temp_bg = temp_dir / f"{gen_id}_bg.png"
+            try:
+                subprocess.run([
+                    'ffmpeg', '-y', '-f', 'lavfi', '-i', 'color=c=black:s=1080x1080:d=1',
+                    '-frames:v', '1', str(temp_bg)
+                ], capture_output=True, timeout=30)
+                if temp_bg.exists():
+                    cover_path = temp_bg
+            except Exception as e:
+                print(f"[API] Failed to generate fallback background: {e}")
+
+        if not cover_path:
+            raise HTTPException(500, "Default background image not found and could not generate fallback")
 
     # Output video path
     video_path = temp_dir / f"{gen_id}.mp4"
@@ -1058,26 +1140,65 @@ async def export_video(gen_id: str, background_tasks: BackgroundTasks):
     # IMPORTANT: drawbox does NOT support 't' variable for animation!
     # Must use color source + overlay filter instead, as overlay DOES support 't'
 
-    filter_complex = (
-        # Scale background image to square 1080x1080
-        f"[1:v]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[bg];"
-        # Add semi-transparent dark bar at bottom
-        f"[bg]drawbox=x=0:y=ih-160:w=iw:h=160:color=black@0.7:t=fill[bg2];"
-        # Overlay bright waveform (centered: x=20, y=H-140 puts it 20px from bottom)
-        f"[bg2][2:v]overlay=20:H-140[v1];"
-        # Create dark overlay rectangle for unplayed portion
-        f"color=c=0x0d1f17:s=1040x120:r=30,format=rgba,colorchannelmixer=aa=0.75[dark];"
-        # Animate dark overlay - moves right over time
-        f"[v1][dark]overlay=x='20+(t/{duration})*1040':y=H-140:shortest=1[v2];"
-        # Create white progress line (4px wide)
-        f"color=c=white:s=4x124:r=30[line];"
-        # Animate progress line
-        f"[v2][line]overlay=x='18+(t/{duration})*1040':y=H-142:shortest=1[v3];"
-        # Create glow effect
-        f"color=c=white:s=12x124:r=30,format=rgba,colorchannelmixer=aa=0.2[glow];"
-        # Animate glow
-        f"[v3][glow]overlay=x='12+(t/{duration})*1040':y=H-142:shortest=1[vout]"
-    )
+    # Different layouts based on whether user has a custom album cover
+    # - With custom cover: waveform at bottom (to not obscure the artwork)
+    # - Without custom cover: waveform centered in middle (cleaner look)
+
+    if has_custom_cover:
+        # Layout: Waveform at bottom with dark bar
+        waveform_y = "H-140"      # 20px from bottom
+        bar_y = "ih-160"          # Dark bar at bottom
+        line_y = "H-142"          # Progress line position
+        print(f"[API] Using bottom waveform layout (custom cover)")
+
+        filter_complex = (
+            # Scale background image to square 1080x1080
+            f"[1:v]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[bg];"
+            # Add semi-transparent dark bar at bottom
+            f"[bg]drawbox=x=0:y={bar_y}:w=iw:h=160:color=black@0.7:t=fill[bg2];"
+            # Overlay bright waveform
+            f"[bg2][2:v]overlay=20:{waveform_y}[v1];"
+            # Create dark overlay rectangle for unplayed portion
+            f"color=c=0x0d1f17:s=1040x120:r=30,format=rgba,colorchannelmixer=aa=0.75[dark];"
+            # Animate dark overlay - moves right over time
+            f"[v1][dark]overlay=x='20+(t/{duration})*1040':y={waveform_y}:shortest=1[v2];"
+            # Create white progress line (4px wide)
+            f"color=c=white:s=4x124:r=30[line];"
+            # Animate progress line
+            f"[v2][line]overlay=x='18+(t/{duration})*1040':y={line_y}:shortest=1[v3];"
+            # Create glow effect
+            f"color=c=white:s=12x124:r=30,format=rgba,colorchannelmixer=aa=0.2[glow];"
+            # Animate glow
+            f"[v3][glow]overlay=x='12+(t/{duration})*1040':y={line_y}:shortest=1[vout]"
+        )
+    else:
+        # Layout: Waveform centered in middle (no dark bar needed for clean look)
+        # Video is 1080x1080, waveform is 1040x120
+        # Center Y = (1080 - 120) / 2 = 480
+        waveform_y = 480
+        line_y = waveform_y - 2   # Progress line slightly above waveform
+        print(f"[API] Using centered waveform layout (no custom cover)")
+
+        filter_complex = (
+            # Scale background image to square 1080x1080
+            f"[1:v]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[bg];"
+            # Add semi-transparent dark bar in the middle (centered around waveform)
+            f"[bg]drawbox=x=0:y={waveform_y - 20}:w=iw:h=160:color=black@0.5:t=fill[bg2];"
+            # Overlay bright waveform (centered)
+            f"[bg2][2:v]overlay=20:{waveform_y}[v1];"
+            # Create dark overlay rectangle for unplayed portion
+            f"color=c=0x0d1f17:s=1040x120:r=30,format=rgba,colorchannelmixer=aa=0.75[dark];"
+            # Animate dark overlay - moves right over time
+            f"[v1][dark]overlay=x='20+(t/{duration})*1040':y={waveform_y}:shortest=1[v2];"
+            # Create white progress line (4px wide)
+            f"color=c=white:s=4x124:r=30[line];"
+            # Animate progress line
+            f"[v2][line]overlay=x='18+(t/{duration})*1040':y={line_y}:shortest=1[v3];"
+            # Create glow effect
+            f"color=c=white:s=12x124:r=30,format=rgba,colorchannelmixer=aa=0.2[glow];"
+            # Animate glow
+            f"[v3][glow]overlay=x='12+(t/{duration})*1040':y={line_y}:shortest=1[vout]"
+        )
 
     video_cmd = [
         'ffmpeg', '-y',

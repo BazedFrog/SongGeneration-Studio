@@ -53,6 +53,7 @@ var App = () => {
     const [estimatedTime, setEstimatedTime] = useState(null);
     const [elapsedTime, setElapsedTime] = useState(0);
     const [gpuInfo, setGpuInfo] = useState(null);
+    const [timingStats, setTimingStats] = useState(null);  // Historical timing data for smart estimates
     // Queue system - server-side storage (shared across all clients)
     const [queue, setQueue] = useState([]);
     const [currentGenId, setCurrentGenId] = useState(null);
@@ -248,7 +249,7 @@ var App = () => {
 
     // NOTE: popFromQueue removed - queue processing is handled server-side
 
-    useEffect(() => { loadModels(true); loadLibrary(); loadGpuInfo(); loadQueue(); }, []);
+    useEffect(() => { loadModels(true); loadLibrary(); loadGpuInfo(); loadQueue(); loadTimingStats(); }, []);
     useEffect(() => () => {
         pollRef.current && clearInterval(pollRef.current);
         timerRef.current && clearInterval(timerRef.current);
@@ -318,9 +319,10 @@ var App = () => {
                 setElapsedTime(Math.max(0, elapsed));
             }
 
-            const sectionCount = typeof payload.sections === 'number' ? payload.sections : (Array.isArray(payload.sections) ? payload.sections.length : 5);
-            const baseTime = MODEL_BASE_TIMES[payload.model] || 240;
-            const estimated = baseTime + (sectionCount * 30);
+            // Use smart estimation (will use history if available, otherwise fallback)
+            const sectionsList = Array.isArray(payload.sections) ? payload.sections : [];
+            const hasReference = Boolean(payload.reference_audio_id || meta.reference_audio_id);
+            const estimated = estimateGenerationTime(payload.model, sectionsList, hasReference);
             setEstimatedTime(estimated);
 
             if (timerRef.current) clearInterval(timerRef.current);
@@ -387,25 +389,81 @@ var App = () => {
         }
     }, [gpuInfo, models]);
 
-    // Time estimation based on model and lyrics
-    const estimateGenerationTime = useCallback((model, sectionsList) => {
+    // Smart time estimation based on model, lyrics, and historical data
+    const estimateGenerationTime = useCallback((model, sectionsList, hasReference = false) => {
+        const numSections = sectionsList.length;
+        const totalLyrics = sectionsList.reduce((acc, s) => acc + (s.lyrics || '').length, 0);
+        const hasLyrics = totalLyrics > 0;
+
+        // Try to use historical data first
+        if (timingStats?.has_history && timingStats.models?.[model]) {
+            const modelStats = timingStats.models[model];
+
+            // Priority 1: Exact section count match
+            const sectionKey = String(numSections);
+            if (modelStats.by_sections?.[sectionKey]) {
+                let estimate = modelStats.by_sections[sectionKey];
+
+                // Adjust for lyrics vs no lyrics (if we have that data)
+                if (hasLyrics && modelStats.avg_with_lyrics && modelStats.avg_without_lyrics) {
+                    const lyricsRatio = modelStats.avg_with_lyrics / modelStats.avg_without_lyrics;
+                    if (!hasLyrics) estimate = Math.round(estimate / lyricsRatio);
+                }
+
+                // Adjust for reference audio
+                if (hasReference && modelStats.avg_with_reference && modelStats.avg_without_reference) {
+                    const refRatio = modelStats.avg_with_reference / modelStats.avg_without_reference;
+                    estimate = Math.round(estimate * refRatio);
+                }
+
+                console.log(`[TIMING] Estimate from history (sections=${numSections}): ${estimate}s`);
+                return estimate;
+            }
+
+            // Priority 2: Use lyrics/no-lyrics average
+            let baseEstimate = hasLyrics ? modelStats.avg_with_lyrics : modelStats.avg_without_lyrics;
+            if (!baseEstimate) baseEstimate = modelStats.avg_time;
+
+            if (baseEstimate) {
+                // Adjust for section count (use average sections as baseline, ~5)
+                const avgSections = 5;
+                const sectionMultiplier = 1 + ((numSections - avgSections) * 0.08);
+                let estimate = Math.round(baseEstimate * sectionMultiplier);
+
+                // Adjust for reference audio
+                if (hasReference && modelStats.avg_with_reference && modelStats.avg_without_reference) {
+                    const refRatio = modelStats.avg_with_reference / modelStats.avg_without_reference;
+                    estimate = Math.round(estimate * refRatio);
+                }
+
+                console.log(`[TIMING] Estimate from history (avg): ${estimate}s`);
+                return Math.max(60, estimate);  // Minimum 1 minute
+            }
+        }
+
+        // Fallback: Static estimation (no historical data)
         let baseTime = MODEL_BASE_TIMES[model] || 240;
 
-        const totalLyrics = sectionsList.reduce((acc, s) => {
-            return acc + (s.lyrics || '').length;
-        }, 0);
+        // Adjust for lyrics length
+        const lyricsTimeAdjust = hasLyrics ? Math.floor(totalLyrics / 500) * 30 : -30;
 
-        const numSections = sectionsList.length;
-        const lyricsTimeAdjust = Math.floor(totalLyrics / 500) * 30;
-        const sectionsAdjust = Math.max(0, numSections - 3) * 10;
+        // Adjust for section count
+        const sectionsAdjust = Math.max(0, numSections - 3) * 15;
 
+        // Adjust for instrumental sections (longer duration)
         const durationSections = sectionsList.filter(s =>
             s.type.includes('intro') || s.type.includes('outro') || s.type.includes('inst')
         ).length;
-        const durationAdjust = durationSections * 15;
+        const durationAdjust = durationSections * 20;
 
-        return baseTime + lyricsTimeAdjust + sectionsAdjust + durationAdjust;
-    }, []);
+        // Adjust for reference audio
+        const referenceAdjust = hasReference ? 60 : 0;
+
+        const estimate = baseTime + lyricsTimeAdjust + sectionsAdjust + durationAdjust + referenceAdjust;
+        console.log(`[TIMING] Estimate from static: ${estimate}s (base=${baseTime}, lyrics=${lyricsTimeAdjust}, sections=${sectionsAdjust}, duration=${durationAdjust}, ref=${referenceAdjust})`);
+
+        return Math.max(60, estimate);
+    }, [timingStats]);
 
     // Close popup when clicking outside
     useEffect(() => {
@@ -539,6 +597,17 @@ var App = () => {
         } catch (e) { console.error(e); }
     };
 
+    const loadTimingStats = async () => {
+        try {
+            const r = await fetch('/api/timing-stats');
+            if (r.ok) {
+                const d = await r.json();
+                setTimingStats(d);
+                console.log('[TIMING] Loaded timing stats:', d);
+            }
+        } catch (e) { console.error('[TIMING] Error loading timing stats:', e); }
+    };
+
     const loadLibrary = async () => {
         try {
             const r = await fetch('/api/generations');
@@ -670,6 +739,9 @@ var App = () => {
         await loadLibrary();
         await loadQueue();
 
+        // Refresh timing stats to incorporate the just-completed generation
+        await loadTimingStats();
+
         // SSE will automatically notify us when a new generation starts
         console.log('[Cleanup] Generation cleanup complete, SSE will handle new generation detection');
     }, []);
@@ -736,7 +808,8 @@ var App = () => {
         setAudio(null);
         setCurrentGenPayload(payload);
 
-        const estimated = estimateGenerationTime(payload.model, payload.sections);
+        const hasReference = Boolean(payload.reference_audio_id);
+        const estimated = estimateGenerationTime(payload.model, payload.sections, hasReference);
         setEstimatedTime(estimated);
         setGenStartTime(Date.now());
         setElapsedTime(0);
@@ -773,14 +846,30 @@ var App = () => {
     };
 
     const generate = async () => {
-        // Validate model is ready before generating
-        const modelReady = models.some(m => m.id === selectedModel && m.status === 'ready');
-        if (!modelReady) {
-            setError(`Model "${selectedModel}" is not ready. Please download it first or select a different model.`);
+        // Validate any model is ready before generating
+        if (!hasReadyModel || models.length === 0) {
+            setError("No models downloaded. Please download a model first before generating.");
             return;
         }
 
+        // Auto-correct model selection if selected model isn't ready
+        let modelToUse = selectedModel;
+        const selectedModelReady = models.some(m => m.id === selectedModel && m.status === 'ready');
+        if (!selectedModelReady) {
+            // Find first ready model
+            const firstReady = models.find(m => m.status === 'ready');
+            if (firstReady) {
+                modelToUse = firstReady.id;
+                setSelectedModel(modelToUse);
+                console.log(`[GENERATE] Auto-corrected model: ${selectedModel} -> ${modelToUse}`);
+            } else {
+                setError("No models ready. Please wait for download to complete.");
+                return;
+            }
+        }
+
         const payload = createPayload();
+        payload.model = modelToUse;  // Ensure we use the corrected model
 
         if (generating) {
             await addToQueue(payload);  // Add to server-side queue

@@ -127,6 +127,125 @@ def save_queue(queue: list):
         print(f"[QUEUE] Error saving queue: {e}")
 
 # ============================================================================
+# Timing History for Smart Estimates
+# ============================================================================
+
+TIMING_FILE = BASE_DIR / "timing_history.json"
+MAX_TIMING_RECORDS = 100  # Keep last 100 successful generations
+
+def load_timing_history() -> list:
+    """Load timing history from file"""
+    try:
+        if TIMING_FILE.exists():
+            with open(TIMING_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"[TIMING] Error loading timing history: {e}")
+    return []
+
+def save_timing_history(history: list):
+    """Save timing history to file"""
+    try:
+        with open(TIMING_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, indent=2)
+    except Exception as e:
+        print(f"[TIMING] Error saving timing history: {e}")
+
+def save_timing_record(metadata: dict):
+    """Save a timing record from a completed generation"""
+    if metadata.get("generation_time_seconds", 0) <= 0:
+        return  # Don't save if no valid timing
+
+    record = {
+        "model": metadata.get("model"),
+        "num_sections": metadata.get("num_sections", 0),
+        "total_lyrics_length": metadata.get("total_lyrics_length", 0),
+        "has_lyrics": metadata.get("has_lyrics", False),
+        "output_mode": metadata.get("output_mode", "mixed"),
+        "has_reference": bool(metadata.get("reference_audio_id")),
+        "generation_time_seconds": metadata.get("generation_time_seconds"),
+        "completed_at": metadata.get("completed_at"),
+    }
+
+    history = load_timing_history()
+    history.append(record)
+
+    # Keep only last N records
+    if len(history) > MAX_TIMING_RECORDS:
+        history = history[-MAX_TIMING_RECORDS:]
+
+    save_timing_history(history)
+    print(f"[TIMING] Saved record: {record['model']}, {record['num_sections']} sections, {record['generation_time_seconds']}s")
+
+def get_timing_stats() -> dict:
+    """Calculate timing statistics from history for smart estimates"""
+    history = load_timing_history()
+
+    if not history:
+        return {"has_history": False, "models": {}}
+
+    # Group by model and calculate stats
+    model_stats = {}
+    for record in history:
+        model = record.get("model", "unknown")
+        if model not in model_stats:
+            model_stats[model] = {
+                "times": [],
+                "with_lyrics": [],
+                "without_lyrics": [],
+                "with_reference": [],
+                "without_reference": [],
+                "by_sections": {},
+            }
+
+        time_sec = record.get("generation_time_seconds", 0)
+        if time_sec <= 0:
+            continue
+
+        model_stats[model]["times"].append(time_sec)
+
+        # Track by lyrics presence
+        if record.get("has_lyrics"):
+            model_stats[model]["with_lyrics"].append(time_sec)
+        else:
+            model_stats[model]["without_lyrics"].append(time_sec)
+
+        # Track by reference presence
+        if record.get("has_reference"):
+            model_stats[model]["with_reference"].append(time_sec)
+        else:
+            model_stats[model]["without_reference"].append(time_sec)
+
+        # Track by section count
+        sections = record.get("num_sections", 0)
+        sections_key = str(sections)
+        if sections_key not in model_stats[model]["by_sections"]:
+            model_stats[model]["by_sections"][sections_key] = []
+        model_stats[model]["by_sections"][sections_key].append(time_sec)
+
+    # Calculate averages
+    result = {"has_history": True, "models": {}}
+    for model, stats in model_stats.items():
+        if not stats["times"]:
+            continue
+
+        result["models"][model] = {
+            "avg_time": int(sum(stats["times"]) / len(stats["times"])),
+            "min_time": min(stats["times"]),
+            "max_time": max(stats["times"]),
+            "count": len(stats["times"]),
+            "avg_with_lyrics": int(sum(stats["with_lyrics"]) / len(stats["with_lyrics"])) if stats["with_lyrics"] else None,
+            "avg_without_lyrics": int(sum(stats["without_lyrics"]) / len(stats["without_lyrics"])) if stats["without_lyrics"] else None,
+            "avg_with_reference": int(sum(stats["with_reference"]) / len(stats["with_reference"])) if stats["with_reference"] else None,
+            "avg_without_reference": int(sum(stats["without_reference"]) / len(stats["without_reference"])) if stats["without_reference"] else None,
+            "by_sections": {
+                k: int(sum(v) / len(v)) for k, v in stats["by_sections"].items() if v
+            },
+        }
+
+    return result
+
+# ============================================================================
 # Model Registry & Download Manager
 # ============================================================================
 
@@ -855,6 +974,13 @@ async def process_queue_item():
             print("[QUEUE-PROC] Queue is empty", flush=True)
             return
 
+        # Check if ANY model is ready before processing
+        all_models = get_all_models()
+        ready_models = [m for m in all_models if m["status"] == "ready"]
+        if not ready_models:
+            print("[QUEUE-PROC] No models ready - waiting for download to complete", flush=True)
+            return  # Don't pop item, just wait
+
         # Pop the next item
         item = queue.pop(0)
         save_queue(queue)
@@ -863,15 +989,15 @@ async def process_queue_item():
         # Notify clients that queue changed
         notify_queue_update()
 
-        # Validate model exists before processing
+        # Validate model - auto-correct if needed
         model_id = item.get('model') or DEFAULT_MODEL
         model_status = get_model_status(model_id)
         if model_status != "ready":
-            print(f"[QUEUE-PROC] Skipping item - model not ready: {model_id} (status: {model_status})", flush=True)
-            # Re-add item to front of queue so it can be retried
-            queue.insert(0, item)
-            save_queue(queue)
-            return
+            # Auto-correct to first available ready model
+            original_model = model_id
+            model_id = ready_models[0]["id"]
+            item['model'] = model_id
+            print(f"[QUEUE-PROC] Auto-corrected model: {original_model} -> {model_id}", flush=True)
 
         # Create generation request from queue item
         gen_id = str(uuid.uuid4())[:8]
@@ -1515,6 +1641,20 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
         generations[gen_id]["output_file"] = str(output_files[0])
         generations[gen_id]["completed_at"] = datetime.now().isoformat()
 
+        # Calculate actual generation time
+        generation_time_seconds = 0
+        if generations[gen_id].get("started_at"):
+            try:
+                started = datetime.fromisoformat(generations[gen_id]["started_at"])
+                generation_time_seconds = int((datetime.now() - started).total_seconds())
+            except:
+                pass
+
+        # Calculate lyrics length for timing stats
+        total_lyrics_length = sum(len(s.lyrics or '') for s in request.sections)
+        num_sections = len(request.sections)
+        has_lyrics = total_lyrics_length > 0
+
         # Save complete metadata for library restoration
         try:
             metadata_path = output_subdir / "metadata.json"
@@ -1524,6 +1664,7 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
                 "model": model_id,
                 "created_at": generations[gen_id].get("created_at", datetime.now().isoformat()),
                 "completed_at": datetime.now().isoformat(),
+                "generation_time_seconds": generation_time_seconds,
                 "gender": request.gender,
                 "timbre": request.timbre,
                 "genre": request.genre,
@@ -1534,6 +1675,9 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
                 "output_mode": request.output_mode,
                 "memory_mode": request.memory_mode,
                 "sections": [{"type": s.type, "lyrics": s.lyrics} for s in request.sections],
+                "num_sections": num_sections,
+                "total_lyrics_length": total_lyrics_length,
+                "has_lyrics": has_lyrics,
                 "description": description,
                 "reference_audio": reference_path if reference_path else None,
                 "reference_audio_id": request.reference_audio_id,
@@ -1545,6 +1689,9 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
                 "top_p": request.top_p,
                 "extend_stride": request.extend_stride,
             }
+
+            # Also save to timing history for future estimates
+            save_timing_record(metadata)
             with open(metadata_path, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2, ensure_ascii=False)
 
@@ -1607,6 +1754,15 @@ async def get_gpu_status():
     global gpu_info
     gpu_info = get_gpu_info()
     return gpu_info
+
+@app.get("/api/timing-stats")
+async def get_timing_statistics():
+    """Get timing statistics for smart generation time estimates.
+
+    Returns historical data about generation times grouped by model,
+    with breakdowns by lyrics presence, reference audio, and section count.
+    """
+    return get_timing_stats()
 
 @app.get("/api/models")
 async def list_models():
@@ -1726,9 +1882,23 @@ async def generate_song(request: SongRequest, background_tasks: BackgroundTasks)
     # Validate model exists BEFORE accepting request
     model_id = request.model or DEFAULT_MODEL
     model_status = get_model_status(model_id)
+
+    # If requested model isn't ready, try to auto-select a ready model
     if model_status != "ready":
-        print(f"[API] Rejected generation - model not ready: {model_id} (status: {model_status})")
-        raise HTTPException(400, f"Model '{model_id}' is not downloaded. Please download the model first.")
+        # Get all ready models
+        all_models = get_all_models()
+        ready_models = [m for m in all_models if m["status"] == "ready"]
+
+        if ready_models:
+            # Auto-correct to first available ready model
+            original_model = model_id
+            model_id = ready_models[0]["id"]
+            request.model = model_id
+            print(f"[API] Auto-corrected model: {original_model} -> {model_id} (original not ready)")
+        else:
+            # No models ready at all
+            print(f"[API] Rejected generation - no models ready (requested: {model_id})")
+            raise HTTPException(400, "No models downloaded. Please download a model first before generating.")
 
     # Acquire lock to prevent race conditions between multiple clients
     with generation_lock:
@@ -2402,12 +2572,24 @@ async def get_queue():
 @app.post("/api/queue")
 async def add_to_queue(payload: dict):
     """Add an item to the generation queue."""
-    # Validate model exists before adding to queue
+    # Validate model - auto-correct if needed
     model_id = payload.get('model') or DEFAULT_MODEL
     model_status = get_model_status(model_id)
+
     if model_status != "ready":
-        print(f"[QUEUE] Rejected - model not ready: {model_id} (status: {model_status})")
-        raise HTTPException(400, f"Model '{model_id}' is not downloaded. Please download the model first.")
+        # Get all ready models
+        all_models = get_all_models()
+        ready_models = [m for m in all_models if m["status"] == "ready"]
+
+        if ready_models:
+            # Auto-correct to first available ready model
+            original_model = model_id
+            model_id = ready_models[0]["id"]
+            payload['model'] = model_id
+            print(f"[QUEUE] Auto-corrected model: {original_model} -> {model_id}")
+        else:
+            # No models ready - reject (queue items will wait until model is downloaded)
+            print(f"[QUEUE] Added with unavailable model: {model_id} (will process when model is ready)")
 
     queue = load_queue()
     # Add unique ID and timestamp

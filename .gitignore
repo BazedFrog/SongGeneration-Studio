@@ -26,6 +26,8 @@ logs/
 # Runtime generated files
 app/output/
 app/uploads/
+app/timing_history.json
+app/queue.json
 
 # Model files (downloaded during install)
 app/songgeneration_*/

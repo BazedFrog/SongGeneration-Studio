@@ -1229,8 +1229,8 @@ class SongRequest(BaseModel):
 # Model Server (Persistent Model in VRAM) - Remaining functions
 # ============================================================================
 
-def start_model_server(preload_model: str = None) -> bool:
-    """Start the model server process."""
+async def start_model_server(preload_model: str = None) -> bool:
+    """Start the model server process (async - doesn't block event loop)."""
     global model_server_process
 
     if is_model_server_running():
@@ -1280,9 +1280,9 @@ def start_model_server(preload_model: str = None) -> bool:
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
         )
 
-        # Wait for server to be ready
+        # Wait for server to be ready (async - doesn't block event loop)
         for i in range(60):  # Wait up to 60 seconds (model loading takes time)
-            time.sleep(1)
+            await asyncio.sleep(1)  # Non-blocking sleep
 
             # Check if process died
             if model_server_process.poll() is not None:
@@ -1920,7 +1920,7 @@ async def run_generation(gen_id: str, request: SongRequest, reference_path: Opti
             if not is_model_server_running():
                 generations[gen_id]["message"] = "Starting model server..."
                 notify_generation_update(gen_id, generations[gen_id])
-                if not start_model_server():
+                if not await start_model_server():
                     raise Exception("Failed to start model server")
 
             # Check if correct model is loaded
@@ -2507,7 +2507,7 @@ async def start_server():
     """Start the model server."""
     if is_model_server_running():
         return {"status": "already_running"}
-    success = start_model_server()
+    success = await start_model_server()
     return {"status": "started" if success else "failed"}
 
 @app.post("/api/model-server/stop")
@@ -2520,7 +2520,7 @@ async def stop_server():
 async def load_model_endpoint(model_id: str):
     """Load a model into VRAM via model server."""
     if not is_model_server_running():
-        if not start_model_server():
+        if not await start_model_server():
             raise HTTPException(500, "Failed to start model server")
     result = load_model_on_server(model_id)
     return result

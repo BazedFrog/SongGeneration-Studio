@@ -44,12 +44,19 @@ module.exports = {
       }
     },
     // Note: Models are now downloaded on-demand through the web UI
-    // 5. Copy API file
+    // 5. Copy API files
     {
       method: "fs.copy",
       params: {
         src: "api.py",
         dest: "app/api.py"
+      }
+    },
+    {
+      method: "fs.copy",
+      params: {
+        src: "model_server.py",
+        dest: "app/model_server.py"
       }
     },
     // 6. Copy web files (all static files)

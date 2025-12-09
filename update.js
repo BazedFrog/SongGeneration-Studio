@@ -15,12 +15,19 @@ module.exports = {
         message: "git pull"
       }
     },
-    // Re-copy custom files (api.py, web/) to app folder
+    // Re-copy custom files (api.py, model_server.py, web/) to app folder
     {
       method: "fs.copy",
       params: {
         src: "api.py",
         dest: "app/api.py"
+      }
+    },
+    {
+      method: "fs.copy",
+      params: {
+        src: "model_server.py",
+        dest: "app/model_server.py"
       }
     },
     {

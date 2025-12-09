@@ -478,6 +478,53 @@ def get_download_progress(model_id: str) -> dict:
         return {"status": "not_started", "progress": 0}
     return download_states[model_id]
 
+def is_model_ready_quick(model_id: str) -> bool:
+    """Quick check if model is likely ready (no HuggingFace API call).
+
+    This is a fast check for queue operations. It checks:
+    1. If model was previously verified (instant)
+    2. If model folder and file exist with reasonable size (fast)
+
+    Returns True if model appears ready, False otherwise.
+    """
+    if model_id not in MODEL_REGISTRY:
+        return False
+
+    # Fast path: already verified
+    if is_model_verified(model_id):
+        folder_path = BASE_DIR / model_id
+        model_file = folder_path / "model.pt"
+        if model_file.exists():
+            return True
+
+    # Check if folder and model file exist with reasonable size
+    folder_path = BASE_DIR / model_id
+    if not folder_path.exists():
+        return False
+
+    # Check for model.pt or model.safetensors
+    model_file = folder_path / "model.pt"
+    model_file_st = folder_path / "model.safetensors"
+
+    expected_size_gb = MODEL_REGISTRY[model_id]["size_gb"]
+    min_size_bytes = int(expected_size_gb * 0.9 * 1000 * 1000 * 1000)  # 90% of expected
+
+    if model_file.exists():
+        try:
+            if model_file.stat().st_size >= min_size_bytes:
+                return True
+        except:
+            pass
+
+    if model_file_st.exists():
+        try:
+            if model_file_st.stat().st_size >= min_size_bytes:
+                return True
+        except:
+            pass
+
+    return False
+
 def get_repo_file_sizes_from_hf(repo_id: str) -> dict:
     """Get exact file sizes in bytes from HuggingFace API.
 
@@ -3174,23 +3221,24 @@ async def get_queue():
 @app.post("/api/queue")
 async def add_to_queue(payload: dict):
     """Add an item to the generation queue."""
-    # Validate model - auto-correct if needed
+    # Validate model using FAST check (no HuggingFace API call)
     model_id = payload.get('model') or DEFAULT_MODEL
-    model_status = get_model_status(model_id)
 
-    if model_status != "ready":
-        # Get all ready models
-        all_models = get_all_models()
-        ready_models = [m for m in all_models if m["status"] == "ready"]
+    if not is_model_ready_quick(model_id):
+        # Model not ready - try to find another ready model (also using quick check)
+        ready_model = None
+        for mid in MODEL_REGISTRY.keys():
+            if is_model_ready_quick(mid):
+                ready_model = mid
+                break
 
-        if ready_models:
-            # Auto-correct to first available ready model
+        if ready_model:
             original_model = model_id
-            model_id = ready_models[0]["id"]
+            model_id = ready_model
             payload['model'] = model_id
             print(f"[QUEUE] Auto-corrected model: {original_model} -> {model_id}")
         else:
-            # No models ready - reject (queue items will wait until model is downloaded)
+            # No models ready - still add to queue (will process when model is downloaded)
             print(f"[QUEUE] Added with unavailable model: {model_id} (will process when model is ready)")
 
     queue = load_queue()

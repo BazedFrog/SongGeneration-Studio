@@ -37,6 +37,13 @@ lightning>=2.5.2
 vector-quantize-pytorch>=1.22.17
 x-transformers>=2.3.25
 
+# === Web/API ===
+requests>=2.28.0
+fastapi>=0.100.0
+uvicorn>=0.20.0
+python-multipart>=0.0.6
+aiofiles>=23.0.0
+
 # === General utilities ===
 ninja>=1.11.1.4
 wheel>=0.45.1

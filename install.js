@@ -25,15 +25,15 @@ module.exports = {
     // (Tencent's GitHub has newer INCOMPATIBLE versions!)
     { method: "fs.copy", params: { src: "requirements.txt", dest: "app/requirements.txt" } },
     { method: "fs.copy", params: { src: "requirements_nodeps.txt", dest: "app/requirements_nodeps.txt" } },
-    // 4. Create virtual environment and install PyTorch 2.6.0 with CUDA 12.4
+    // 4. Install PyTorch (cross-platform via torch.js)
     {
-      method: "shell.run",
+      method: "script.start",
       params: {
-        venv: "env",
-        path: "app",
-        message: [
-          "uv pip install torch==2.6.0 torchaudio==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124"
-        ]
+        uri: "torch.js",
+        params: {
+          path: "app",
+          venv: "env"
+        }
       }
     },
     // 5. Install Python dependencies

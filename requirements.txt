@@ -19,6 +19,7 @@ lameenc>=1.8.1
 librosa>=0.11.0
 openunmix>=1.3.0
 nnAudio>=0.3.3
+torchcodec>=0.1.0
 
 # === ML utilities ===
 einops>=0.8.1

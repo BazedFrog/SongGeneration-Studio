@@ -25,18 +25,8 @@ module.exports = {
     // (Tencent's GitHub has newer INCOMPATIBLE versions!)
     { method: "fs.copy", params: { src: "requirements.txt", dest: "app/requirements.txt" } },
     { method: "fs.copy", params: { src: "requirements_nodeps.txt", dest: "app/requirements_nodeps.txt" } },
-    // 4. Install PyTorch (cross-platform via torch.js)
-    {
-      method: "script.start",
-      params: {
-        uri: "torch.js",
-        params: {
-          path: "app",
-          venv: "env"
-        }
-      }
-    },
-    // 5. Install Python dependencies
+    
+    // 4. Install Python dependencies
     {
       method: "shell.run",
       params: {
@@ -46,6 +36,17 @@ module.exports = {
           "uv pip install -r requirements.txt",
           "uv pip install -r requirements_nodeps.txt --no-deps"
         ]
+      }
+    },
+    // 5. Install PyTorch (cross-platform via torch.js)
+    {
+      method: "script.start",
+      params: {
+        uri: "torch.js",
+        params: {
+          path: "app",
+          venv: "env"
+        }
       }
     },
     // 6. Sync custom Python files from root to app/

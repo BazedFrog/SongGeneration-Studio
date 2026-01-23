@@ -1067,14 +1067,28 @@ if STATIC_DIR.exists():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SongGeneration Studio API Server")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8000)
+    # Accept string so templating leftovers like "{{port}}" don't crash argparse
+    parser.add_argument("--port", type=str, default=None)
     args = parser.parse_args()
+
+    # Resolve port: prefer env PORT (set by Pinokio), then CLI, else default
+    port_raw = os.getenv("PORT") or args.port or "7860"
+
+    # Robust port parsing with sane fallback
+    try:
+        port = int(port_raw)
+    except (TypeError, ValueError):
+        port = 7860
+
+    if port < 1 or port > 65535:
+        print(f"[WARN] Invalid port '{port_raw}', falling back to 7860")
+        port = 7860
 
     print()
     print("=" * 60)
     print("  SongGeneration Studio")
-    print(f"  Open http://{args.host}:{args.port} in your browser")
+    print(f"  Open http://{args.host}:{port} in your browser")
     print("=" * 60)
     print()
 
-    uvicorn.run(app, host=args.host, port=args.port)
+    uvicorn.run(app, host=args.host, port=port)

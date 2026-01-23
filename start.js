@@ -11,10 +11,13 @@ module.exports = {
         env: {
           // Use platform-specific path separator: semicolon for Windows, colon for Unix
           PYTHONPATH: "{{platform === 'win32' ? cwd + '/app;' + cwd + '/app/codeclm/tokenizer/Flow1dVAE' : cwd + '/app:' + cwd + '/app/codeclm/tokenizer/Flow1dVAE'}}",
-          PYTHONUTF8: "1"
+          PYTHONUTF8: "1",
+          // Pinokio fills PORT; main.py will fallback internally if empty
+          PORT: "{{port}}"
         },
         path: "app",
-        message: "python main.py --host 127.0.0.1 --port {{port}}",
+        // Let main.py resolve the port from env or its own default to avoid CLI parse issues
+        message: "python main.py --host 127.0.0.1",
         on: [{
           event: "/http:\\/\\/[^\\s\\/]+:\\d{2,5}(?=[^\\w]|$)/",
           done: true
